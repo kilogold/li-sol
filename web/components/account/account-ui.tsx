@@ -13,7 +13,9 @@ import {
   useGetSignatures,
   useGetTokenAccounts,
   useRequestAirdrop,
+  useAmountToUiAmount,
   useTransferSol,
+  useTokenAccountsUiAmounts,
 } from './account-data-access';
 
 export function AccountBalance({ address }: { address: PublicKey }) {
@@ -125,6 +127,8 @@ export function AccountTokens({ address }: { address: PublicKey }) {
     return query.data?.slice(0, 5);
   }, [query.data, showAll]);
 
+  const uiAmounts = useTokenAccountsUiAmounts(items ?? []);
+
   return (
     <div className="space-y-2">
       <div className="justify-between">
@@ -168,35 +172,38 @@ export function AccountTokens({ address }: { address: PublicKey }) {
                 </tr>
               </thead>
               <tbody>
-                {items?.map(({ account, pubkey }) => (
-                  <tr key={pubkey.toString()}>
-                    <td>
-                      <div className="flex space-x-2">
+                {items?.map(({ account, pubkey }, index) => {
+                  const uiAmount = uiAmounts[pubkey.toString()];
+                  return (
+                    <tr key={pubkey.toString()}>
+                      <td>
+                        <div className="flex space-x-2">
+                          <span className="font-mono">
+                            <ExplorerLink
+                              label={ellipsify(pubkey.toString())}
+                              path={`account/${pubkey.toString()}`}
+                            />
+                          </span>
+                        </div>
+                      </td>
+                      <td>
+                        <div className="flex space-x-2">
+                          <span className="font-mono">
+                            <ExplorerLink
+                              label={ellipsify(account.data.parsed.info.mint)}
+                              path={`account/${account.data.parsed.info.mint.toString()}`}
+                            />
+                          </span>
+                        </div>
+                      </td>
+                      <td className="text-right">
                         <span className="font-mono">
-                          <ExplorerLink
-                            label={ellipsify(pubkey.toString())}
-                            path={`account/${pubkey.toString()}`}
-                          />
+                          {uiAmount ?? account.data.parsed.info.tokenAmount.uiAmount}
                         </span>
-                      </div>
-                    </td>
-                    <td>
-                      <div className="flex space-x-2">
-                        <span className="font-mono">
-                          <ExplorerLink
-                            label={ellipsify(account.data.parsed.info.mint)}
-                            path={`account/${account.data.parsed.info.mint.toString()}`}
-                          />
-                        </span>
-                      </div>
-                    </td>
-                    <td className="text-right">
-                      <span className="font-mono">
-                        {account.data.parsed.info.tokenAmount.uiAmount}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                    </tr>
+                  );
+                })}
 
                 {(query.data?.length ?? 0) > 5 && (
                   <tr>

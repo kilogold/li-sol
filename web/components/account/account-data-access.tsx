@@ -72,8 +72,6 @@ export function useTokenAccountsUiAmounts(items: { pubkey: PublicKey; account: A
     queries: items.map(({ account, pubkey }) => ({
       queryKey: ['token-account-ui-amount', pubkey.toString(), account.data.parsed.info.tokenAmount.amount],
       queryFn: async () => {
-        const mint = new PublicKey(account.data.parsed.info.mint);
-        const amount = account.data.parsed.info.tokenAmount.amount;
 
         const jsonBody = {
           mint: account.data.parsed.info.mint, 

@@ -127,7 +127,6 @@ export function AccountTokens({ address }: { address: PublicKey }) {
   }, [query.data, showAll]);
 
   const uiAmounts = useTokenAccountsUiAmounts(items ?? []);
-  console.log('Testing Kelvin');
 
   return (
     <div className="space-y-2">

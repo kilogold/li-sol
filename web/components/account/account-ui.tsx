@@ -13,7 +13,6 @@ import {
   useGetSignatures,
   useGetTokenAccounts,
   useRequestAirdrop,
-  useAmountToUiAmount,
   useTransferSol,
   useTokenAccountsUiAmounts,
 } from './account-data-access';
@@ -128,6 +127,7 @@ export function AccountTokens({ address }: { address: PublicKey }) {
   }, [query.data, showAll]);
 
   const uiAmounts = useTokenAccountsUiAmounts(items ?? []);
+  console.log('Testing Kelvin');
 
   return (
     <div className="space-y-2">
@@ -172,8 +172,8 @@ export function AccountTokens({ address }: { address: PublicKey }) {
                 </tr>
               </thead>
               <tbody>
-                {items?.map(({ account, pubkey }, index) => {
-                  const uiAmount = uiAmounts[pubkey.toString()];
+                {items?.map(({ account, pubkey }) => {
+                  const uiAmountQuery = uiAmounts[pubkey.toString()];
                   return (
                     <tr key={pubkey.toString()}>
                       <td>
@@ -198,7 +198,13 @@ export function AccountTokens({ address }: { address: PublicKey }) {
                       </td>
                       <td className="text-right">
                         <span className="font-mono">
-                          {uiAmount ?? account.data.parsed.info.tokenAmount.uiAmount}
+                          {uiAmountQuery.isLoading ? (
+                            "Loading..."
+                          ) : uiAmountQuery.isError ? (
+                            "Error: " + uiAmountQuery.error
+                          ) : (
+                            uiAmountQuery.data ?? "Not Available"
+                          )}
                         </span>
                       </td>
                     </tr>

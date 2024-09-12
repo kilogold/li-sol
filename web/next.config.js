@@ -27,4 +27,6 @@ const plugins = [
   withNx,
 ];
 
+require('dotenv').config();
+
 module.exports = composePlugins(...plugins)(nextConfig);

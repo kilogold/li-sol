@@ -22,6 +22,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { useTransactionToast } from '../ui/ui-layout';
 import { useEffect, useState } from 'react';
+import { useQueries } from '@tanstack/react-query';
+import { UseQueryResult } from '@tanstack/react-query';
 
 export function useGetBalance({ address }: { address: PublicKey }) {
   const { connection } = useConnection();
@@ -63,76 +65,59 @@ export function useGetTokenAccounts({ address }: { address: PublicKey }) {
   });
 }
 
-export function useAmountToUiAmount(tokenInfo: { mint: string; owner: string; tokenAmount: { uiAmount: number; amount: string; decimals: number } }) {
+export function useTokenAccountsUiAmounts(items: { pubkey: PublicKey; account: AccountInfo<ParsedAccountData>; }[]): { [key: string]: UseQueryResult<string | null, unknown> } {
   const { connection } = useConnection();
-  const { wallet, publicKey, signTransaction } = useWallet();
-  const mint = new PublicKey(tokenInfo.mint);
-  const amount = Number(tokenInfo.tokenAmount.amount);
-  const programId = TOKEN_2022_PROGRAM_ID;
 
-  return useQuery({
-    queryKey: ['amount-to-ui-amount', { amount: tokenInfo.tokenAmount.amount, endpoint: connection.rpcEndpoint }],
-    queryFn: async () => {
-      if (!wallet || !publicKey || !signTransaction) {
-        throw new Error('Wallet not connected or does not support signing');
-      }
-
-      const transaction = new Transaction().add(createAmountToUiAmountInstruction(mint, amount, programId));
-      transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-      
-      // Sign the transaction using the wallet adapter
-      const signedTransaction = await signTransaction(transaction);
-      
-      // Simulate the transaction
-      const { returnData, err } = (await connection.simulateTransaction(signedTransaction)).value;
-      
-      if (returnData?.data) {
-        return Buffer.from(returnData.data[0], returnData.data[1]).toString('utf-8');
-      }
-      if (err) {
-        throw new Error(err.toString());
-      }
-      return null;
-    },
-    enabled: !!wallet && !!publicKey && !!signTransaction, // Only enable the query if all dependencies are available
-  });
-}
-
-// Custom hook to fetch uiAmounts for token accounts
-export function useTokenAccountsUiAmounts(items: { pubkey: PublicKey; account: AccountInfo<ParsedAccountData>; }[]) {
-  const { connection } = useConnection();
-  const { wallet, publicKey, signTransaction } = useWallet();
-  const [uiAmounts, setUiAmounts] = useState<{ [key: string]: string | null }>({});
-
-  useEffect(() => {
-    if (items && wallet && publicKey && signTransaction) {
-      items.forEach(({ account, pubkey }) => {
+  const queries = useQueries({
+    queries: items.map(({ account, pubkey }) => ({
+      queryKey: ['token-account-ui-amount', pubkey.toString(), account.data.parsed.info.tokenAmount.amount],
+      queryFn: async () => {
         const mint = new PublicKey(account.data.parsed.info.mint);
-        const amount = Number(account.data.parsed.info.tokenAmount.amount);
-        const programId = TOKEN_2022_PROGRAM_ID;
+        const amount = account.data.parsed.info.tokenAmount.amount;
 
-        const fetchUiAmount = async () => {
-          const transaction = new Transaction().add(createAmountToUiAmountInstruction(mint, amount, programId));
-          transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-          transaction.feePayer = publicKey;
-          const signedTransaction = await signTransaction(transaction);
+        const jsonBody = {
+          mint: account.data.parsed.info.mint, 
+          amount: account.data.parsed.info.tokenAmount.amount, 
+          endpoint: connection.rpcEndpoint 
+        }
 
-          const { returnData, err } = (await connection.simulateTransaction(signedTransaction)).value;
+        const response = await fetch('/api/signTransaction', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(jsonBody),
+        });
+        console.log('response', response);
 
-          if (returnData?.data) {
-            const uiAmount = Buffer.from(returnData.data[0], returnData.data[1]).toString('utf-8');
-            setUiAmounts((prev) => ({ ...prev, [pubkey.toString()]: uiAmount }));
-          } else if (err) {
-            setUiAmounts((prev) => ({ ...prev, [pubkey.toString()]: null }));
-          }
-        };
+        if (!response.ok) {
+          throw new Error(response.statusText);
+        }
 
-        fetchUiAmount();
-      });
-    }
-  }, [items, wallet, publicKey, signTransaction, connection]);
+        const signedTransactionBase64 = await response.text();
+        const signedTransaction = Transaction.from(Buffer.from(signedTransactionBase64, 'base64'));
 
-  return uiAmounts;
+        // Simulate the transaction
+        const { returnData, err } = (await connection.simulateTransaction(signedTransaction)).value;
+
+        if (err) {
+          throw new Error(err.toString());
+        }
+
+        console.log('returnData', returnData);
+        if (returnData?.data) {
+          return Buffer.from(returnData.data[0], returnData.data[1]).toString('utf-8');
+        }
+
+        return null;
+      },
+    })),
+  });
+
+  return items.reduce((acc, { pubkey }, index) => {
+    acc[pubkey.toString()] = queries[index];
+    return acc;
+  }, {} as { [key: string]: UseQueryResult<string | null, unknown> });
 }
 
 export function useTransferSol({ address }: { address: PublicKey }) {

@@ -2,12 +2,14 @@
 
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import {
-    createAmountToUiAmountInstruction,
+  createAmountToUiAmountInstruction,
+  getInterestBearingMintConfigState,
+  getMint,
   TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
 } from '@solana/spl-token';
 import {
-    AccountInfo,
+  AccountInfo,
   Connection,
   LAMPORTS_PER_SOL,
   ParsedAccountData,
@@ -22,8 +24,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { useTransactionToast } from '../ui/ui-layout';
 import { useEffect, useState } from 'react';
-import { useQueries } from '@tanstack/react-query';
-import { UseQueryResult } from '@tanstack/react-query';
+import { useQueries, UseQueryResult } from '@tanstack/react-query';
 
 export function useGetBalance({ address }: { address: PublicKey }) {
   const { connection } = useConnection();
@@ -65,57 +66,83 @@ export function useGetTokenAccounts({ address }: { address: PublicKey }) {
   });
 }
 
-export function useTokenAccountsUiAmounts(items: { pubkey: PublicKey; account: AccountInfo<ParsedAccountData>; }[]): { [key: string]: UseQueryResult<string | null, unknown> } {
-  const { connection } = useConnection();
+export async function getTokenAccountsUiAmounts({
+  items,
+  connection,
+}: {
+  items: { pubkey: PublicKey; account: AccountInfo<ParsedAccountData> }[];
+  connection: Connection;
+}): Promise<{ results: { [key: string]: string | null }; hasInterestBearing: boolean }> {
+  const results: { [key: string]: string | null } = {};
+  let hasInterestBearing = false;
 
-  const queries = useQueries({
-    queries: items.map(({ account, pubkey }) => ({
-      queryKey: ['token-account-ui-amount', pubkey.toString(), account.data.parsed.info.tokenAmount.amount],
-      queryFn: async () => {
+  for (const { account, pubkey } of items) {
 
-        const jsonBody = {
-          mint: account.data.parsed.info.mint, 
-          amount: account.data.parsed.info.tokenAmount.amount, 
-          endpoint: connection.rpcEndpoint 
-        }
+    // If the token account's mint lacks interest bearing extension configuration, it likely doesn't have the extension.
+    // In this case, we return the basic uiAmount.
+    if ('spl-token-2022' !== account.data.program) {
+      results[pubkey.toString()] = account.data.parsed.info.tokenAmount.uiAmount;
+      continue;
+    }
 
-        const response = await fetch('/api/signTransaction', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(jsonBody),
-        });
-        console.log('response', response);
+    const mintInfo = await getMint(connection, new PublicKey(account.data.parsed.info.mint), undefined, TOKEN_2022_PROGRAM_ID);
+    if (getInterestBearingMintConfigState(mintInfo) == null) {
+      results[pubkey.toString()] = account.data.parsed.info.tokenAmount.uiAmount;
+      continue;
+    }
 
-        if (!response.ok) {
-          throw new Error(response.statusText);
-        }
+    // Mark that at least one mint account has the interest bearing extension
+    hasInterestBearing = true;
 
-        const signedTransactionBase64 = await response.text();
-        const signedTransaction = Transaction.from(Buffer.from(signedTransactionBase64, 'base64'));
+    // Otherwise, we need to fetch the uiAmount from the mint's interest bearing extension.
+    try {
+      const jsonBody = {
+        mint: account.data.parsed.info.mint,
+        amount: account.data.parsed.info.tokenAmount.amount,
+        endpoint: connection.rpcEndpoint,
+      };
 
-        // Simulate the transaction
-        const { returnData, err } = (await connection.simulateTransaction(signedTransaction)).value;
+      const response = await fetch('/api/signTransaction', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(jsonBody),
+      });
 
-        if (err) {
-          throw new Error(err.toString());
-        }
+      if (!response.ok) {
+        throw new Error(response.statusText);
+      }
 
-        console.log('returnData', returnData);
-        if (returnData?.data) {
-          return Buffer.from(returnData.data[0], returnData.data[1]).toString('utf-8');
-        }
+      const signedTransactionBase64 = await response.text();
+      const signedTransaction = Transaction.from(
+        Buffer.from(signedTransactionBase64, 'base64')
+      );
 
-        return null;
-      },
-    })),
-  });
+      // Simulate the transaction
+      const { returnData, err } = (
+        await connection.simulateTransaction(signedTransaction)
+      ).value;
 
-  return items.reduce((acc, { pubkey }, index) => {
-    acc[pubkey.toString()] = queries[index];
-    return acc;
-  }, {} as { [key: string]: UseQueryResult<string | null, unknown> });
+      if (err) {
+        throw new Error(err.toString());
+      }
+
+      if (returnData?.data) {
+        results[pubkey.toString()] = Buffer.from(
+          returnData.data[0],
+          returnData.data[1]
+        ).toString('utf-8');
+      } else {
+        results[pubkey.toString()] = null;
+      }
+    } catch (error) {
+      console.error(`Error processing account ${pubkey.toString()}:`, error);
+      results[pubkey.toString()] = null;
+    }
+  }
+
+  return { results, hasInterestBearing };
 }
 
 export function useTransferSol({ address }: { address: PublicKey }) {

@@ -1,10 +1,10 @@
 'use client';
 
-import { useWallet } from '@solana/wallet-adapter-react';
+import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js';
 import { IconRefresh } from '@tabler/icons-react';
 import { useQueryClient } from '@tanstack/react-query';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect, useCallback } from 'react';
 import { AppModal, ellipsify } from '../ui/ui-layout';
 import { useCluster } from '../cluster/cluster-data-access';
 import { ExplorerLink } from '../cluster/cluster-ui';
@@ -14,7 +14,7 @@ import {
   useGetTokenAccounts,
   useRequestAirdrop,
   useTransferSol,
-  useTokenAccountsUiAmounts,
+  getTokenAccountsUiAmounts,
 } from './account-data-access';
 
 export function AccountBalance({ address }: { address: PublicKey }) {
@@ -119,14 +119,38 @@ export function AccountButtons({ address }: { address: PublicKey }) {
 
 export function AccountTokens({ address }: { address: PublicKey }) {
   const [showAll, setShowAll] = useState(false);
+  const [hasInterestBearing, setHasInterestBearing] = useState(false); // State for interest-bearing flag
   const query = useGetTokenAccounts({ address });
   const client = useQueryClient();
+  const { connection } = useConnection();
+
   const items = useMemo(() => {
     if (showAll) return query.data;
     return query.data?.slice(0, 5);
   }, [query.data, showAll]);
 
-  const uiAmounts = useTokenAccountsUiAmounts(items ?? []);
+  const [renderedUiAmounts, setRenderedUiAmounts] = useState<{ [key: string]: string | null }>({});
+
+  const fetchUiAmounts = useCallback(async () => {
+    const { results: uiAmounts, hasInterestBearing } = await getTokenAccountsUiAmounts({ items: items ?? [], connection });
+    console.log('uiAmounts', uiAmounts);
+    setRenderedUiAmounts(uiAmounts);
+    setHasInterestBearing(hasInterestBearing);
+  }, [items, connection]); // Callback reference is re-assigned when dependencies change.
+
+  useEffect(() => {
+    fetchUiAmounts();
+  }, [fetchUiAmounts]); // Fetch initial UI amounts. Also re-fetch when callback reference changes.
+
+  useEffect(() => {
+    if (!hasInterestBearing) return; // We don't need polling without interest-bearing tokens.
+
+    const interval = setInterval(() => {
+      fetchUiAmounts(); // Polling refetch.
+    }, 500); // Poll rate.
+
+    return () => clearInterval(interval);
+  }, [hasInterestBearing, fetchUiAmounts]);
 
   return (
     <div className="space-y-2">
@@ -172,7 +196,7 @@ export function AccountTokens({ address }: { address: PublicKey }) {
               </thead>
               <tbody>
                 {items?.map(({ account, pubkey }) => {
-                  const uiAmountQuery = uiAmounts[pubkey.toString()];
+                  const uiAmount = renderedUiAmounts[pubkey.toString()];
                   return (
                     <tr key={pubkey.toString()}>
                       <td>
@@ -197,13 +221,7 @@ export function AccountTokens({ address }: { address: PublicKey }) {
                       </td>
                       <td className="text-right">
                         <span className="font-mono">
-                          {uiAmountQuery.isLoading ? (
-                            "Loading..."
-                          ) : uiAmountQuery.isError ? (
-                            "Error: " + uiAmountQuery.error
-                          ) : (
-                            uiAmountQuery.data ?? "Not Available"
-                          )}
+                          {uiAmount ?? "Not Available"}
                         </span>
                       </td>
                     </tr>

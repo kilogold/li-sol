@@ -76,6 +76,7 @@ pnpm build
 ```
 
 ### Usage
+<img width="763" alt="image" src="https://github.com/user-attachments/assets/54ed85af-3267-4aa2-bf38-0731887f58f6">
 
 * Connect your wallet.
 * Click on the `Account` tab to view your token balances.

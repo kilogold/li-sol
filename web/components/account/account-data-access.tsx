@@ -314,100 +314,83 @@ export function useGetTransactionDetails({ signature }: { signature: string }) {
   });
 }
 
-export function hasInstructionDiscriminator(transaction: ParsedTransactionWithMeta, discriminator: number): boolean {
-  if (!transaction || !transaction.transaction || !transaction.transaction.message) {
-    console.log('bad transaction', transaction);
-    return false;
-  }
-
-  const instructions = transaction.transaction.message.instructions;
-  return instructions.some((instruction: ParsedInstruction | PartiallyDecodedInstruction) => {
-    // Check if the instruction is partially decoded and has a data field
-    if ('data' in instruction) {
-      const decodedData = Buffer.from(instruction.data, 'base64');
-      return decodedData[0] === discriminator;
-    }
-
-    console.log('No discriminator', instruction);
-    return false;
-  });
-}
-
-// Filters transactions from Token22 program for interest-bearing instructionsaccording to the mint address.
-export function useFilteredTransactions({ rateAuthorityAddress }: { rateAuthorityAddress: PublicKey }) {
+// Filters transactions from Token22 program for interest-bearing extension (ibe) instructions according to the mint address.
+export function useFilteredSuccessfulTransactions({ mintAddress }: { mintAddress: PublicKey }) {
     const { connection } = useConnection();
 
     return useQuery({
-        queryKey: ['filtered-transactions', { endpoint: connection.rpcEndpoint, rateAuthorityAddress }],
+        queryKey: ['filtered-successful-transactions', { endpoint: connection.rpcEndpoint, mintAddress }],
         queryFn: async () => {
-            // Get all the signatures produced by the rate authority.
-            const allSignatures = await connection.getSignaturesForAddress(rateAuthorityAddress);
+            // Query for all transactions produced by the mint account.
+            const allSignatures = await connection.getSignaturesForAddress(mintAddress);
+            console.log('allSignatures', allSignatures);
 
-            const filteredSignatures = await Promise.all(
+            // Only consider successful transactions.
+            const successfulSignatures = allSignatures.filter(signature => signature.err === null);
+            console.log('successfulSignatures', successfulSignatures);
+            // Qualify(by first mapping, then filtering) signatures for transactions containing Token22, ibe instructions.
+            const ibeSignatures = await Promise.all(
+                successfulSignatures.map(async (signature) => {
+                    const parsedTransaction = await connection.getParsedTransaction(signature.signature);
 
-                // Each signature potentially maps to multiple instructions.
-                allSignatures.map(async (info) => {
-                    console.log('info', info);
+                    // Track the resultant interest rate for each transaction.
+                    let resultantInterestRate = 0;
 
-                    // Obtain a parseable transaction from the signature.
-                    const transaction = await connection.getTransaction(info.signature, {
-                        maxSupportedTransactionVersion: 0,
-                    });
+                    // Parsed transaction must not be null, since we obtained the signature from the API.
+                    if (!parsedTransaction) 
+                        throw new Error('Transaction not found');
 
-                    // Transaction must not be null, since we obtain signatures from the API.
-                    if (!transaction) {
-                        throw new Error(`Transaction not found for signature: ${info.signature}`);
-                    }
+                    // Transactions without (Token22) instructions are excluded.
+                    // NOTE: NEED TO HANDLE CPI INSTRUCTIONS!!!!
+                    // Perhaps we need to rethink our approach...
+                    if (!parsedTransaction.transaction.message.instructions.some(
+                        (instruction) => instruction.programId.equals(TOKEN_2022_PROGRAM_ID)
+                    )) return null;
 
-                    // Filter the instructions for the interest-bearing program.
-                    const filteredInstructions = transaction.transaction.message.compiledInstructions.filter((instruction, index) => {
-                        // Check if it's a Token22 transaction
-                        const programId = transaction.transaction.message.getAccountKeys().get(instruction.programIdIndex);
-                        console.log('filter:programId', programId?.toBase58());
-                        if (!programId?.equals(TOKEN_2022_PROGRAM_ID)) {
-                            return false;
+                    // Of the Token22 instructions, only those pertaining to the interest-bearing extension are relevant.
+                    // Relevance is determined by the discriminator of the instruction or its parsed type.
+                    const isRelevant = parsedTransaction.transaction.message.instructions.some(
+                        (instruction) => {
+                            const isPartiallyDecodedInstruction = 'data' in instruction;
+                            if (isPartiallyDecodedInstruction) {
+                                const discriminator = Number(instruction.data[0]);
+                                if (discriminator === TokenInstruction.InterestBearingMintExtension)
+                                    throw new Error('Unsupported InterestBearingMintExtension instruction.');
+
+                                return false; // Irrelevant instruction.
+                            }
+                            else {
+                                if (instruction.parsed.type === 'initializeInterestBearingConfig' || 
+                                    instruction.parsed.type === 'updateInterestBearingConfigRate') {
+                                    
+                                    // Instructions are chronologically ordered, so overwrite the resultant interest rate.
+                                    resultantInterestRate = instruction.parsed.info.rate;
+                                    
+                                    return true; // Relevant instruction.
+                                }
+                                return false; // Irrelevant instruction.
+                            }
                         }
+                    );
 
-                        // Check the instruction discriminator
-                        if (instruction.data[0] !== TokenInstruction.InterestBearingMintExtension) {
-                            return false;
-                        }
-
-                        // If we've made it this far, the instruction passes all checks
-                        return true;
-                    });
-
-                    // If not instructions matched, map to null as filter for the encapsulating transaction.
-                    if (filteredInstructions.length === 0) {
+                    // If the transaction does not contain any relevant instructions, it is disqualified.
+                    if (!isRelevant) {
+                        console.log('Disqualified/filtered transaction:', signature);
                         return null;
                     }
 
-                    // Parse the matching instructions to interest rate data.
-                    const parsedTransaction = await connection.getParsedTransaction(info.signature, {
-                        commitment: 'confirmed',
-                        maxSupportedTransactionVersion: 0,
-                    });
-
-                    // Parsed transaction must never be null.
-                    if (!parsedTransaction) {
-                        throw new Error(`Parsed transaction not found for signature: ${info.signature}`);
-                    }
-
-                    console.log('matching transaction', parsedTransaction);
-
-                    // Map each instruction to its parsed form.
-
-                    
-
                     return {
-                        ...info,
-                        ibt_instructions: filteredInstructions,
+                        ...signature,
+                        resultantInterestRate
                     };
-                }) // signatureInfo.map
-            ); // promise.all
+                })
+            ).then(results => {
+                console.log('allResults', results);
+                return results.filter(Boolean);
+            }); // Filter out disqualified/nulls
 
-            // Filter out disqualifying transactions via null filter.
-            return filteredSignatures.filter(Boolean);
+            console.log('ibeSignatures', ibeSignatures);
+            return ibeSignatures;
         },
     });
 }

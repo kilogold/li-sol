@@ -16,8 +16,7 @@ import {
   useTransferSol,
   getTokenAccountsUiAmounts,
   useGetTransactionDetails,
-  hasInstructionDiscriminator,
-  useFilteredTransactions,
+  useFilteredSuccessfulTransactions,
 } from './account-data-access';
 
 export function AccountBalance({ address }: { address: PublicKey }) {
@@ -353,7 +352,7 @@ export function AccountTransactions({ address }: { address: PublicKey }) {
 }
 
 export function FilteredAccountTransactions({ address }: { address: PublicKey }) {
-  const query = useFilteredTransactions({ rateAuthorityAddress: address });
+  const query = useFilteredSuccessfulTransactions({ mintAddress: address });
   const [showAll, setShowAll] = useState(false);
 
   const filteredItems = useMemo(() => (query.data ?? []) as ConfirmedSignatureInfo[], [query.data]);
@@ -396,7 +395,7 @@ export function FilteredAccountTransactions({ address }: { address: PublicKey })
                   <th>Signature</th>
                   <th className="text-right">Slot</th>
                   <th>Block Time</th>
-                  <th className="text-right">Status</th>
+                  <th className="text-right">Basis Points</th>
                 </tr>
               </thead>
               <tbody>
@@ -417,17 +416,8 @@ export function FilteredAccountTransactions({ address }: { address: PublicKey })
                     <td>
                       {new Date((item.blockTime ?? 0) * 1000).toISOString()}
                     </td>
-                    <td className="text-right">
-                      {item.err ? (
-                        <div
-                          className="badge badge-error"
-                          title={JSON.stringify(item.err)}
-                        >
-                          Failed
-                        </div>
-                      ) : (
-                        <div className="badge badge-success">Success</div>
-                      )}
+                    <td className="text-center">
+                      <div>{(item as any).resultantInterestRate}</div>
                     </td>
                   </tr>
                 ))}

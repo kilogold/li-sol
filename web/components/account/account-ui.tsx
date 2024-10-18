@@ -1,7 +1,7 @@
 'use client';
 
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js';
+import { ConfirmedSignatureInfo, LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js';
 import { IconRefresh } from '@tabler/icons-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState, useEffect, useCallback } from 'react';
@@ -15,6 +15,9 @@ import {
   useRequestAirdrop,
   useTransferSol,
   getTokenAccountsUiAmounts,
+  useGetTransactionDetails,
+  hasInstructionDiscriminator,
+  useFilteredTransactions,
 } from './account-data-access';
 
 export function AccountBalance({ address }: { address: PublicKey }) {
@@ -31,6 +34,7 @@ export function AccountBalance({ address }: { address: PublicKey }) {
     </div>
   );
 }
+
 export function AccountChecker() {
   const { publicKey } = useWallet();
   if (!publicKey) {
@@ -38,6 +42,7 @@ export function AccountChecker() {
   }
   return <AccountBalanceCheck address={publicKey} />;
 }
+
 export function AccountBalanceCheck({ address }: { address: PublicKey }) {
   const { cluster } = useCluster();
   const mutation = useRequestAirdrop({ address });
@@ -327,6 +332,106 @@ export function AccountTransactions({ address }: { address: PublicKey }) {
                   </tr>
                 ))}
                 {(query.data?.length ?? 0) > 5 && (
+                  <tr>
+                    <td colSpan={4} className="text-center">
+                      <button
+                        className="btn btn-xs btn-outline"
+                        onClick={() => setShowAll(!showAll)}
+                      >
+                        {showAll ? 'Show Less' : 'Show All'}
+                      </button>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function FilteredAccountTransactions({ address }: { address: PublicKey }) {
+  const query = useFilteredTransactions({ rateAuthorityAddress: address });
+  const [showAll, setShowAll] = useState(false);
+
+  const filteredItems = useMemo(() => (query.data ?? []) as ConfirmedSignatureInfo[], [query.data]);
+
+  const items = useMemo(() => {
+    if (showAll) return filteredItems;
+    return filteredItems.slice(0, 5);
+  }, [filteredItems, showAll]);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex justify-between">
+        <h2 className="text-2xl font-bold">Filtered Transaction History</h2>
+        <div className="space-x-2">
+          {query.isLoading ? (
+            <span className="loading loading-spinner"></span>
+          ) : (
+            <button
+              className="btn btn-sm btn-outline"
+              onClick={() => query.refetch()}
+            >
+              <IconRefresh size={16} />
+            </button>
+          )}
+        </div>
+      </div>
+      {query.isError && (
+        <pre className="alert alert-error">
+          Error: {query.error?.message.toString()}
+        </pre>
+      )}
+      {query.isSuccess && (
+        <div>
+          {filteredItems.length === 0 ? (
+            <div>No transactions found.</div>
+          ) : (
+            <table className="table border-4 rounded-lg border-separate border-base-300">
+              <thead>
+                <tr>
+                  <th>Signature</th>
+                  <th className="text-right">Slot</th>
+                  <th>Block Time</th>
+                  <th className="text-right">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => (
+                  <tr key={item.signature}>
+                    <th className="font-mono">
+                      <ExplorerLink
+                        path={`tx/${item.signature}`}
+                        label={ellipsify(item.signature, 8)}
+                      />
+                    </th>
+                    <td className="font-mono text-right">
+                      <ExplorerLink
+                        path={`block/${item.slot}`}
+                        label={item.slot.toString()}
+                      />
+                    </td>
+                    <td>
+                      {new Date((item.blockTime ?? 0) * 1000).toISOString()}
+                    </td>
+                    <td className="text-right">
+                      {item.err ? (
+                        <div
+                          className="badge badge-error"
+                          title={JSON.stringify(item.err)}
+                        >
+                          Failed
+                        </div>
+                      ) : (
+                        <div className="badge badge-success">Success</div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {filteredItems.length > 5 && (
                   <tr>
                     <td colSpan={4} className="text-center">
                       <button

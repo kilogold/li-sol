@@ -12,6 +12,7 @@ import {
   AccountButtons,
   AccountTokens,
   AccountTransactions,
+  FilteredAccountTransactions,
 } from './account-ui';
 
 export default function AccountDetailFeature() {
@@ -50,7 +51,9 @@ export default function AccountDetailFeature() {
       <div className="space-y-8">
         <AccountTokens address={address} />
         <AccountTransactions address={address} />
+        <FilteredAccountTransactions address={address} />
       </div>
+      <div className="visual-spacer h-8" aria-hidden="true"></div>
     </div>
   );
 }

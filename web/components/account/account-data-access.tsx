@@ -10,6 +10,7 @@ import {
   TokenInstruction,
 } from '@solana/spl-token';
 import {
+  ConfirmedSignatureInfo,
   AccountInfo,
   Connection,
   LAMPORTS_PER_SOL,
@@ -314,6 +315,11 @@ export function useGetTransactionDetails({ signature }: { signature: string }) {
   });
 }
 
+
+export interface InterestBearingConfirmedSignatureInfo extends ConfirmedSignatureInfo {
+    resultantInterestRate: number;
+}
+
 // Filters transactions from Token22 program for interest-bearing extension (ibe) instructions according to the mint address.
 export function useFilteredSuccessfulTransactions({ mintAddress }: { mintAddress: PublicKey }) {
     const { connection } = useConnection();
@@ -323,11 +329,10 @@ export function useFilteredSuccessfulTransactions({ mintAddress }: { mintAddress
         queryFn: async () => {
             // Query for all transactions produced by the mint account.
             const allSignatures = await connection.getSignaturesForAddress(mintAddress);
-            console.log('allSignatures', allSignatures);
 
             // Only consider successful transactions.
             const successfulSignatures = allSignatures.filter(signature => signature.err === null);
-            console.log('successfulSignatures', successfulSignatures);
+            
             // Qualify(by first mapping, then filtering) signatures for transactions containing Token22, ibe instructions.
             const ibeSignatures = await Promise.all(
                 successfulSignatures.map(async (signature) => {
@@ -340,16 +345,15 @@ export function useFilteredSuccessfulTransactions({ mintAddress }: { mintAddress
                     if (!parsedTransaction) 
                         throw new Error('Transaction not found');
 
-                    // Transactions without (Token22) instructions are excluded.
-                    // NOTE: NEED TO HANDLE CPI INSTRUCTIONS!!!!
-                    // Perhaps we need to rethink our approach...
-                    if (!parsedTransaction.transaction.message.instructions.some(
-                        (instruction) => instruction.programId.equals(TOKEN_2022_PROGRAM_ID)
-                    )) return null;
+                    // Chronologically combine main & inner instructions to account for CPI instructions.
+                    const flattenedInstructions = parsedTransaction.transaction.message.instructions.flatMap((instruction, index) => {
+                      const innerInstructions = parsedTransaction.meta?.innerInstructions?.[index]?.instructions || [];
+                      return [instruction, ...innerInstructions];
+                    });
 
                     // Of the Token22 instructions, only those pertaining to the interest-bearing extension are relevant.
                     // Relevance is determined by the discriminator of the instruction or its parsed type.
-                    const isRelevant = parsedTransaction.transaction.message.instructions.some(
+                    const isRelevant = flattenedInstructions.some(
                         (instruction) => {
                             const isPartiallyDecodedInstruction = 'data' in instruction;
                             if (isPartiallyDecodedInstruction) {
@@ -360,12 +364,12 @@ export function useFilteredSuccessfulTransactions({ mintAddress }: { mintAddress
                                 return false; // Irrelevant instruction.
                             }
                             else {
-                                if (instruction.parsed.type === 'initializeInterestBearingConfig' || 
-                                    instruction.parsed.type === 'updateInterestBearingConfigRate') {
-                                    
-                                    // Instructions are chronologically ordered, so overwrite the resultant interest rate.
+                                // Note: Instructions are chronologically ordered, so overwrite the resultant interest rate.
+                                if (instruction.parsed.type === 'initializeInterestBearingConfig') {
                                     resultantInterestRate = instruction.parsed.info.rate;
-                                    
+                                    return true; // Relevant instruction.
+                                } else if (instruction.parsed.type === 'updateInterestBearingConfigRate') {
+                                    resultantInterestRate = instruction.parsed.info.newRate;
                                     return true; // Relevant instruction.
                                 }
                                 return false; // Irrelevant instruction.
@@ -375,21 +379,17 @@ export function useFilteredSuccessfulTransactions({ mintAddress }: { mintAddress
 
                     // If the transaction does not contain any relevant instructions, it is disqualified.
                     if (!isRelevant) {
-                        console.log('Disqualified/filtered transaction:', signature);
                         return null;
                     }
 
+                    // Extend the signature collection with the resultant interest rate.
                     return {
                         ...signature,
                         resultantInterestRate
                     };
                 })
-            ).then(results => {
-                console.log('allResults', results);
-                return results.filter(Boolean);
-            }); // Filter out disqualified/nulls
+            ).then(results => results.filter(Boolean)); // Filter out disqualified transactions.
 
-            console.log('ibeSignatures', ibeSignatures);
             return ibeSignatures;
         },
     });

@@ -17,6 +17,7 @@ import {
   getTokenAccountsUiAmounts,
   useGetTransactionDetails,
   useFilteredSuccessfulTransactions,
+  InterestBearingConfirmedSignatureInfo
 } from './account-data-access';
 
 export function AccountBalance({ address }: { address: PublicKey }) {
@@ -355,7 +356,7 @@ export function FilteredAccountTransactions({ address }: { address: PublicKey })
   const query = useFilteredSuccessfulTransactions({ mintAddress: address });
   const [showAll, setShowAll] = useState(false);
 
-  const filteredItems = useMemo(() => (query.data ?? []) as ConfirmedSignatureInfo[], [query.data]);
+  const filteredItems = useMemo(() => (query.data ?? []) as InterestBearingConfirmedSignatureInfo[], [query.data]);
 
   const items = useMemo(() => {
     if (showAll) return filteredItems;

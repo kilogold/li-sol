@@ -3,6 +3,8 @@
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import {
   createAmountToUiAmountInstruction,
+  ExtensionType,
+  getExtensionTypes,
   getInterestBearingMintConfigState,
   getMint,
   TOKEN_2022_PROGRAM_ID,
@@ -393,4 +395,15 @@ export function useFilteredSuccessfulTransactions({ mintAddress }: { mintAddress
             return ibeSignatures;
         },
     });
+}
+
+export async function isInterestBearingAccount(connection: Connection, address: PublicKey): Promise<boolean> {
+  try {
+    const mint = await getMint(connection, address, 'confirmed', TOKEN_2022_PROGRAM_ID);
+    const extensionTypes = getExtensionTypes(mint.tlvData);
+    return extensionTypes.includes(ExtensionType.InterestBearingConfig);
+  } catch (error) {
+    console.error('Error checking interest-bearing status:', error);
+    return false;
+  }
 }

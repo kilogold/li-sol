@@ -366,7 +366,7 @@ export function FilteredAccountTransactions({ address }: { address: PublicKey })
   return (
     <div className="space-y-2">
       <div className="flex justify-between">
-        <h2 className="text-2xl font-bold">Filtered Transaction History</h2>
+        <h2 className="text-2xl font-bold">Interest Bearing Rates Trend</h2>
         <div className="space-x-2">
           {query.isLoading ? (
             <span className="loading loading-spinner"></span>

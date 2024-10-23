@@ -10,6 +10,9 @@ import {
   TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
   TokenInstruction,
+  TokenAccountNotFoundError,
+  TokenInvalidAccountOwnerError,
+  TokenInvalidAccountSizeError,
 } from '@solana/spl-token';
 import {
   ConfirmedSignatureInfo,
@@ -399,11 +402,24 @@ export function useFilteredSuccessfulTransactions({ mintAddress }: { mintAddress
 
 export async function isInterestBearingAccount(connection: Connection, address: PublicKey): Promise<boolean> {
   try {
+    // Fetch the mint information for the given address
     const mint = await getMint(connection, address, 'confirmed', TOKEN_2022_PROGRAM_ID);
+
+    // Get the extension types for the mint account
     const extensionTypes = getExtensionTypes(mint.tlvData);
+
+    // Check if the mint account has the interest-bearing extension
     return extensionTypes.includes(ExtensionType.InterestBearingConfig);
   } catch (error) {
-    console.error('Error checking interest-bearing status:', error);
+    if (
+      error instanceof TokenAccountNotFoundError ||
+      error instanceof TokenInvalidAccountOwnerError ||
+      error instanceof TokenInvalidAccountSizeError
+    ) {
+      // INTENTIONAL:Address does not point to a valid mint account.
+    } else {
+      console.error('Error checking interest-bearing status:', error);
+    }
     return false;
   }
 }

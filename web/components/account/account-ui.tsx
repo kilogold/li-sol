@@ -14,10 +14,14 @@ import {
   useGetTokenAccounts,
   useRequestAirdrop,
   useTransferSol,
+  useTransferToken, // Import the useTransferToken hook
   getTokenAccountsUiAmounts,
   useGetTransactionDetails,
   useFilteredSuccessfulTransactions,
-  InterestBearingConfirmedSignatureInfo
+  InterestBearingConfirmedSignatureInfo,
+  getAccruedValue,
+  fetchBalanceToValue,
+  fetchValueToBalance
 } from './account-data-access';
 
 export function AccountBalance({ address }: { address: PublicKey }) {
@@ -135,6 +139,7 @@ export function AccountTokens({ address }: { address: PublicKey }) {
   }, [query.data, showAll]);
 
   const [renderedUiAmounts, setRenderedUiAmounts] = useState<{ [key: string]: string | null }>({});
+  const [showSendModal, setShowSendModal] = useState<{ [key: string]: boolean }>({});
 
   const fetchUiAmounts = useCallback(async () => {
     const { results: uiAmounts, hasInterestBearing } = await getTokenAccountsUiAmounts({ items: items ?? [], connection });
@@ -197,11 +202,13 @@ export function AccountTokens({ address }: { address: PublicKey }) {
                   <th>Public Key</th>
                   <th>Mint</th>
                   <th className="text-right">Balance</th>
+                  <th className="text-center">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {items?.map(({ account, pubkey }) => {
                   const uiAmount = renderedUiAmounts[pubkey.toString()];
+                  const mintAddress = new PublicKey(account.data.parsed.info.mint);
                   return (
                     <tr key={pubkey.toString()}>
                       <td>
@@ -229,10 +236,23 @@ export function AccountTokens({ address }: { address: PublicKey }) {
                           {uiAmount ?? "Not Available"}
                         </span>
                       </td>
+                      <td className="text-center">
+                        <button
+                          className="btn btn-xs btn-outline"
+                          onClick={() => setShowSendModal((prev) => ({ ...prev, [pubkey.toString()]: true }))}
+                        >
+                          Send
+                        </button>
+                        <ModalSendToken
+                          hide={() => setShowSendModal((prev) => ({ ...prev, [pubkey.toString()]: false }))}
+                          show={showSendModal[pubkey.toString()] || false}
+                          address={pubkey}
+                          mintAddress={mintAddress}
+                        />
+                      </td>
                     </tr>
                   );
                 })}
-
                 {(query.data?.length ?? 0) > 5 && (
                   <tr>
                     <td colSpan={4} className="text-center">
@@ -553,6 +573,96 @@ function ModalSend({
         value={amount}
         onChange={(e) => setAmount(e.target.value)}
       />
+    </AppModal>
+  );
+}
+
+function ModalSendToken({
+  hide,
+  show,
+  address,
+  mintAddress,
+}: {
+  hide: () => void;
+  show: boolean;
+  address: PublicKey;
+  mintAddress: PublicKey;
+}) {
+  const wallet = useWallet();
+  const { connection } = useConnection();
+  const mutation = useTransferToken({ address, mintAddress });
+  const [destination, setDestination] = useState('');
+  const [amount, setAmount] = useState('1');
+  const [selectedOption, setSelectedOption] = useState('balance');
+
+  useEffect(() => {
+    // Update converted value based on selected option and input amount
+    const updateConvertedValue = async () => {
+      const inputAmount = parseFloat(amount);
+      if (selectedOption === 'balance') {
+        await fetchBalanceToValue({
+          connection,
+          mintAddress,
+          tokenAmount: inputAmount.toString(),
+        });
+      } else {
+        await fetchValueToBalance({
+          connection,
+          mintAddress,
+          uiAmount: inputAmount.toString(),
+        });
+      }
+    };
+
+    updateConvertedValue();
+  }, [amount, selectedOption, connection, mintAddress]);
+
+  if (!address || !wallet.sendTransaction) {
+    return <div>Wallet not connected</div>;
+  }
+
+  return (
+    <AppModal
+      hide={hide}
+      show={show}
+      title="Send Token"
+      submitDisabled={!destination || !amount || mutation.isPending}
+      submitLabel="Send"
+      submit={() => {
+        mutation
+          .mutateAsync({
+            destination: new PublicKey(destination),
+            amount: parseFloat(amount),
+          })
+          .then(() => hide());
+      }}
+    >
+      <input
+        disabled={mutation.isPending}
+        type="text"
+        placeholder="Destination"
+        className="input input-bordered w-full"
+        value={destination}
+        onChange={(e) => setDestination(e.target.value)}
+      />
+      <input
+        disabled={mutation.isPending}
+        type="number"
+        step="any"
+        min="1"
+        placeholder="Amount"
+        className="input input-bordered w-full"
+        value={amount}
+        onChange={(e) => setAmount(e.target.value)}
+      />
+      <select
+        className="select select-bordered w-full mt-2"
+        value={selectedOption}
+        onChange={(e) => setSelectedOption(e.target.value)}
+      >
+        <option value="balance">Balance</option>
+        <option value="value">Value</option>
+      </select>
     </AppModal>
   );
 }

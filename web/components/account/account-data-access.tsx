@@ -13,6 +13,7 @@ import {
   TokenAccountNotFoundError,
   TokenInvalidAccountOwnerError,
   TokenInvalidAccountSizeError,
+  createTransferInstruction,
 } from '@solana/spl-token';
 import {
   ConfirmedSignatureInfo,
@@ -88,68 +89,15 @@ export async function getTokenAccountsUiAmounts({
   let hasInterestBearing = false;
 
   for (const { account, pubkey } of items) {
+    const mintAddress = new PublicKey(account.data.parsed.info.mint);
 
-    // If the token account's mint lacks interest bearing extension configuration, it likely doesn't have the extension.
-    // In this case, we return the basic uiAmount.
-    if ('spl-token-2022' !== account.data.program) {
+    // Check if the token account's mint has the interest-bearing extension
+    const accruedValue = await getAccruedValue(connection, mintAddress, pubkey);
+    if (accruedValue !== null) {
+      results[pubkey.toString()] = accruedValue;
+      hasInterestBearing = true;
+    } else {
       results[pubkey.toString()] = account.data.parsed.info.tokenAmount.uiAmount;
-      continue;
-    }
-
-    const mintInfo = await getMint(connection, new PublicKey(account.data.parsed.info.mint), undefined, TOKEN_2022_PROGRAM_ID);
-    if (getInterestBearingMintConfigState(mintInfo) == null) {
-      results[pubkey.toString()] = account.data.parsed.info.tokenAmount.uiAmount;
-      continue;
-    }
-
-    // Mark that at least one mint account has the interest bearing extension
-    hasInterestBearing = true;
-
-    // Otherwise, we need to fetch the uiAmount from the mint's interest bearing extension.
-    try {
-      const jsonBody = {
-        mint: account.data.parsed.info.mint,
-        amount: account.data.parsed.info.tokenAmount.amount,
-        endpoint: connection.rpcEndpoint,
-      };
-
-      const response = await fetch('/api/signTransaction', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(jsonBody),
-      });
-
-      if (!response.ok) {
-        throw new Error(response.statusText);
-      }
-
-      const signedTransactionBase64 = await response.text();
-      const signedTransaction = Transaction.from(
-        Buffer.from(signedTransactionBase64, 'base64')
-      );
-
-      // Simulate the transaction
-      const { returnData, err } = (
-        await connection.simulateTransaction(signedTransaction)
-      ).value;
-
-      if (err) {
-        throw new Error(err.toString());
-      }
-
-      if (returnData?.data) {
-        results[pubkey.toString()] = Buffer.from(
-          returnData.data[0],
-          returnData.data[1]
-        ).toString('utf-8');
-      } else {
-        results[pubkey.toString()] = null;
-      }
-    } catch (error) {
-      console.error(`Error processing account ${pubkey.toString()}:`, error);
-      results[pubkey.toString()] = null;
     }
   }
 
@@ -421,5 +369,224 @@ export async function isInterestBearingAccount(connection: Connection, address: 
       console.error('Error checking interest-bearing status:', error);
     }
     return false;
+  }
+}
+
+export function useTransferToken({
+  address,
+  mintAddress,
+}: {
+  address: PublicKey;
+  mintAddress: PublicKey;
+}) {
+  const { connection } = useConnection();
+  const transactionToast = useTransactionToast();
+  const wallet = useWallet();
+  const client = useQueryClient();
+
+  return useMutation({
+    mutationKey: [
+      'transfer-token',
+      { endpoint: connection.rpcEndpoint, address, mintAddress },
+    ],
+    mutationFn: async (input: { destination: PublicKey; amount: number }) => {
+      let signature: TransactionSignature = '';
+      try {
+        const { transaction, latestBlockhash } = await createTokenTransaction({
+          publicKey: address,
+          destination: input.destination,
+          amount: input.amount,
+          mintAddress,
+          connection,
+        });
+
+        // Send transaction and await for signature
+        signature = await wallet.sendTransaction(transaction, connection);
+
+        // Confirm transaction
+        await connection.confirmTransaction(
+          { signature, ...latestBlockhash },
+          'confirmed'
+        );
+
+        console.log(signature);
+        return signature;
+      } catch (error: unknown) {
+        console.log('error', `Transaction failed! ${error}`, signature);
+        return;
+      }
+    },
+    onSuccess: (signature) => {
+      if (signature) {
+        transactionToast(signature);
+      }
+      return Promise.all([
+        client.invalidateQueries({
+          queryKey: [
+            'get-token-accounts',
+            { endpoint: connection.rpcEndpoint, address },
+          ],
+        }),
+        client.invalidateQueries({
+          queryKey: [
+            'get-signatures',
+            { endpoint: connection.rpcEndpoint, address },
+          ],
+        }),
+      ]);
+    },
+    onError: (error) => {
+      toast.error(`Transaction failed! ${error}`);
+    },
+  });
+}
+
+async function createTokenTransaction({
+  publicKey,
+  destination,
+  amount,
+  mintAddress,
+  connection,
+}: {
+  publicKey: PublicKey;
+  destination: PublicKey;
+  amount: number;
+  mintAddress: PublicKey;
+  connection: Connection;
+}): Promise<{
+  transaction: VersionedTransaction;
+  latestBlockhash: { blockhash: string; lastValidBlockHeight: number };
+}> {
+  // Get the latest blockhash to use in our transaction
+  const latestBlockhash = await connection.getLatestBlockhash();
+
+  // Create instructions to send tokens
+  const instructions = [
+    createTransferInstruction(
+      publicKey,
+      destination,
+      publicKey,
+      amount,
+      [],
+      TOKEN_PROGRAM_ID
+    ),
+  ];
+
+  // Create a new TransactionMessage with version and compile it to legacy
+  const messageLegacy = new TransactionMessage({
+    payerKey: publicKey,
+    recentBlockhash: latestBlockhash.blockhash,
+    instructions,
+  }).compileToLegacyMessage();
+
+  // Create a new VersionedTransaction which supports legacy and v0
+  const transaction = new VersionedTransaction(messageLegacy);
+
+  return {
+    transaction,
+    latestBlockhash,
+  };
+}
+
+export async function fetchBalanceToValue({
+  connection,
+  mintAddress,
+  tokenAmount,
+}: {
+  connection: Connection;
+  mintAddress: PublicKey;
+  tokenAmount: string;
+}): Promise<string | null> {
+  try {
+    const jsonBody = {
+      mint: mintAddress.toString(),
+      amount: tokenAmount,
+      endpoint: connection.rpcEndpoint,
+    };
+
+    const response = await fetch('/api/amountToUiAmount', { // Updated route name
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(jsonBody),
+    });
+
+    if (!response.ok) {
+      throw new Error(response.statusText);
+    }
+
+    const accruedValue = await response.text();
+    return accruedValue;
+  } catch (error) {
+    console.error('Error fetching accrued value from server:', error);
+    return null;
+  }
+}
+
+export async function getAccruedValue(
+  connection: Connection,
+  mintAddress: PublicKey,
+  tokenAccountAddress: PublicKey
+): Promise<string | null> {
+  try {
+    // Check if the mint has the interest-bearing extension
+    if ((await isInterestBearingAccount(connection, mintAddress)) === false) {
+      return null;
+    }
+
+    // Fetch the token account balance
+    const tokenAccountInfo = await connection.getParsedAccountInfo(tokenAccountAddress);
+    if (!tokenAccountInfo.value) {
+      throw new Error('Token account not found');
+    }
+
+    const tokenAmount = (tokenAccountInfo.value.data as ParsedAccountData).parsed.info.tokenAmount.amount;
+
+    // Use the helper function to fetch the accrued value
+    return await fetchBalanceToValue({
+      connection,
+      mintAddress,
+      tokenAmount,
+    });
+  } catch (error) {
+    console.error('Error calculating accrued value:', error);
+    return null;
+  }
+}
+
+export async function fetchValueToBalance({
+  connection,
+  mintAddress,
+  uiAmount,
+}: {
+  connection: Connection;
+  mintAddress: PublicKey;
+  uiAmount: string;
+}): Promise<string | null> {
+  try {
+    const jsonBody = {
+      mint: mintAddress.toString(),
+      amount: uiAmount,
+      endpoint: connection.rpcEndpoint,
+    };
+
+    const response = await fetch('/api/uiAmountToAmount', { // Use the uiAmountToAmount route
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(jsonBody),
+    });
+
+    if (!response.ok) {
+      throw new Error(response.statusText);
+    }
+
+    const balanceValue = await response.text();
+    return balanceValue;
+  } catch (error) {
+    console.error('Error fetching balance value from server:', error);
+    return null;
   }
 }

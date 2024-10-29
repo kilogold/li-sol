@@ -21,7 +21,8 @@ import {
   InterestBearingConfirmedSignatureInfo,
   getAccruedValue,
   fetchBalanceToValue,
-  fetchValueToBalance
+  fetchValueToBalance,
+  isInterestBearingAccount
 } from './account-data-access';
 
 export function AccountBalance({ address }: { address: PublicKey }) {
@@ -143,7 +144,7 @@ export function AccountTokens({ address }: { address: PublicKey }) {
 
   const fetchUiAmounts = useCallback(async () => {
     const { results: uiAmounts, hasInterestBearing } = await getTokenAccountsUiAmounts({ items: items ?? [], connection });
-    console.log('uiAmounts', uiAmounts);
+    //console.log('uiAmounts', uiAmounts);
     setRenderedUiAmounts(uiAmounts);
     setHasInterestBearing(hasInterestBearing);
   }, [items, connection]); // Callback reference is re-assigned when dependencies change.
@@ -592,30 +593,51 @@ function ModalSendToken({
   const { connection } = useConnection();
   const mutation = useTransferToken({ address, mintAddress });
   const [destination, setDestination] = useState('');
-  const [amount, setAmount] = useState('1');
+  const [amount, setAmount] = useState('');
+  const [convertedAmount, setConvertedAmount] = useState('');
   const [selectedOption, setSelectedOption] = useState('balance');
+  const [isInterestBearing, setIsInterestBearing] = useState(false);
 
   useEffect(() => {
-    // Update converted value based on selected option and input amount
-    const updateConvertedValue = async () => {
-      const inputAmount = parseFloat(amount);
-      if (selectedOption === 'balance') {
-        await fetchBalanceToValue({
-          connection,
-          mintAddress,
-          tokenAmount: inputAmount.toString(),
-        });
-      } else {
-        await fetchValueToBalance({
-          connection,
-          mintAddress,
-          uiAmount: inputAmount.toString(),
-        });
-      }
+    // Check if the mint has the interest-bearing extension
+    const checkInterestBearing = async () => {
+      const result = await isInterestBearingAccount(connection, mintAddress);
+      setIsInterestBearing(result);
     };
 
-    updateConvertedValue();
-  }, [amount, selectedOption, connection, mintAddress]);
+    checkInterestBearing();
+  }, [connection, mintAddress]);
+
+  useEffect(() => {
+    if (isInterestBearing && amount) {
+      // Update converted value based on selected option and input amount
+      const updateConvertedAmount = async () => {
+        const convertedValue = (selectedOption === 'balance') 
+          ? await fetchBalanceToValue({
+            connection,
+            mintAddress,
+            tokenAmount: amount,
+          }) 
+          : await fetchValueToBalance({
+            connection,
+            mintAddress,
+            uiAmount: amount,
+          });
+
+        setConvertedAmount(convertedValue?.toString() ?? '0');
+      };
+
+      updateConvertedAmount();
+    }
+  }, [amount, selectedOption, connection, mintAddress, isInterestBearing]);
+
+  const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    // Allow only numbers and a single decimal point
+    if (/^\d*\.?\d*$/.test(value)) {
+      setAmount(value);
+    }
+  };
 
   if (!address || !wallet.sendTransaction) {
     return <div>Wallet not connected</div>;
@@ -647,22 +669,32 @@ function ModalSendToken({
       />
       <input
         disabled={mutation.isPending}
-        type="number"
-        step="any"
-        min="1"
+        type="text" // Changed to text for precision handling
         placeholder="Amount"
         className="input input-bordered w-full"
         value={amount}
-        onChange={(e) => setAmount(e.target.value)}
+        onChange={handleAmountChange}
       />
-      <select
-        className="select select-bordered w-full mt-2"
-        value={selectedOption}
-        onChange={(e) => setSelectedOption(e.target.value)}
-      >
-        <option value="balance">Balance</option>
-        <option value="value">Value</option>
-      </select>
+      {isInterestBearing ? (
+        <>
+          <select
+            className="select select-bordered w-full mt-2"
+            value={selectedOption}
+            onChange={(e) => {
+              setSelectedOption(e.target.value);
+              setConvertedAmount(''); // Clear the converted amount only
+            }}
+          >
+            <option value="balance">Balance</option>
+            <option value="value">Value</option>
+          </select>
+          {amount && (
+            <div>
+              {selectedOption === 'balance' ? 'Value' : 'Balance'} : {convertedAmount}
+            </div>
+          )}
+        </>
+      ) : null}
     </AppModal>
   );
 }

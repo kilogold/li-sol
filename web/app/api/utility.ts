@@ -1,10 +1,12 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { PublicKey, Transaction, Connection, Keypair } from '@solana/web3.js';
+import { PublicKey, Transaction, Connection, Keypair, TransactionError } from '@solana/web3.js';
+
+export type OperationCallback = (connection: Connection, signer: Keypair, mintPublicKey: PublicKey, amount: string) => Promise<string>;
 
 export async function simulateTransaction(
   req: NextApiRequest,
   res: NextApiResponse,
-  instructionCreator: (mintPublicKey: PublicKey, amount: string) => Transaction
+  instructionCreator: OperationCallback
 ): Promise<Response> {
   try {
     const buffers = [];
@@ -21,12 +23,10 @@ export async function simulateTransaction(
     };
 
     if (!mint || !amount || !endpoint) {
-      console.error('Missing required fields');
       return new Response('Missing required fields', { status: 400 });
     }
 
     const privateKeyString = process.env.SOLANA_PRIVATE_KEY;
-    console.log('SOLANA_PRIVATE_KEY:', privateKeyString); // Log environment variable
 
     if (!privateKeyString) {
       const errorMessage = 'SOLANA_PRIVATE_KEY environment variable is not set';
@@ -43,32 +43,17 @@ export async function simulateTransaction(
       return new Response('Internal server error', { status: 500 });
     }
 
-    console.log('Creating keypair from private key:', privateKey);
     const keypair = Keypair.fromSecretKey(privateKey);
 
     const connection = new Connection(endpoint);
     const mintPublicKey = new PublicKey(mint);
 
-    const transaction = instructionCreator(mintPublicKey, amount);
-
-    transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-    transaction.feePayer = keypair.publicKey;
-    transaction.sign(keypair);
-
-    const { returnData, err } = (await connection.simulateTransaction(transaction)).value;
-
-    if (err) {
-      throw new Error(err.toString());
-    }
-
-    if (returnData?.data) {
-      const resultValue = Buffer.from(returnData.data[0], returnData.data[1]).toString('utf-8');
-      return new Response(resultValue, { status: 200 });
-    } else {
-      return new Response('Failed to fetch result value', { status: 500 });
-    }
-  } catch (error) {
-    console.error('Error in simulateTransaction:', error);
-    return new Response('Failed to process the transaction', { status: 500 });
+    const result = await instructionCreator(connection, keypair, mintPublicKey, amount);
+    
+    return new Response(result, { status: 200 });
+  
+} catch (error) {
+    console.error('Error in utility function2:', error);
+    return new Response(`Internal server error: ${error}`, { status: 500 });
   }
 }

@@ -584,6 +584,7 @@ export async function fetchValueToBalance({
     }
 
     const balanceValue = await response.text();
+    console.log('balanceValue', balanceValue);
     return balanceValue;
   } catch (error) {
     console.error('Error fetching balance value from server:', error);

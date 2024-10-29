@@ -1,20 +1,20 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { createAmountToUiAmountInstruction, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
+import { TOKEN_2022_PROGRAM_ID, amountToUiAmount } from '@solana/spl-token';
 import { simulateTransaction } from '../utility';
-import { Transaction } from '@solana/web3.js';
 
 export async function POST(req: NextApiRequest, res: NextApiResponse) {
-  console.log('amountToUiAmount handler called');
-  console.log('Type of res:', typeof res); // Debugging line
-  console.log('Is res a function:', typeof res.status === 'function');
+  //console.log('amountToUiAmount handler called');
   if (req.method !== 'POST') {
     console.log('Invalid method:', req.method);
     return res.status(405).send('Method not allowed');
   }
 
-  return await simulateTransaction(req, res, (mintPublicKey, amount) =>
-    new Transaction().add(
-      createAmountToUiAmountInstruction(mintPublicKey, BigInt(amount), TOKEN_2022_PROGRAM_ID)
-    )
-  );
+  return await simulateTransaction(req, res, async (connection, signer, mintPublicKey, amount) => {
+    const result = await amountToUiAmount(connection,signer, mintPublicKey, BigInt(amount), TOKEN_2022_PROGRAM_ID);
+
+    if (result === null) {
+      throw new Error('Invalid amount');
+    }
+    return result.toString();
+  });
 }
